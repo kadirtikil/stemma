@@ -1,8 +1,10 @@
 //! Thin async wrapper around the `git` CLI.
 
 mod commit;
+mod log;
 mod status;
 
+pub use log::Commit;
 pub use status::{Change, FileStatus, Status};
 
 use std::path::{Path, PathBuf};
