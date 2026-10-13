@@ -3,10 +3,12 @@
 mod commit;
 mod diff;
 mod log;
+mod refs;
 mod status;
 
 pub use diff::{FileDiff, Hunk, Segment};
 pub use log::Commit;
+pub use refs::{Branch, Tag};
 pub use status::{Change, FileStatus, Status};
 
 use std::path::{Path, PathBuf};
