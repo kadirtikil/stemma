@@ -1,5 +1,6 @@
 //! Thin async wrapper around the `git` CLI.
 
+mod commit;
 mod status;
 
 pub use status::{Change, FileStatus, Status};
