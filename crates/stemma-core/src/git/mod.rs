@@ -5,11 +5,13 @@ mod diff;
 mod log;
 mod refs;
 mod status;
+mod worktree;
 
 pub use diff::{FileDiff, Hunk, Segment};
 pub use log::Commit;
 pub use refs::{Branch, Tag};
 pub use status::{Change, FileStatus, Status};
+pub use worktree::{Checkout, Worktree};
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

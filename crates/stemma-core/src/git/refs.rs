@@ -80,7 +80,7 @@ impl Git {
 }
 
 /// Git validates ref names itself, but a leading dash would be parsed as a flag.
-fn check_name(name: &str) -> Result<()> {
+pub(super) fn check_name(name: &str) -> Result<()> {
     if name.is_empty() || name.starts_with('-') {
         return Err(GitError::Parse(format!("invalid ref name {name:?}")));
     }
