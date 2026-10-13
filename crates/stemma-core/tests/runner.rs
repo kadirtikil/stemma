@@ -1,6 +1,6 @@
 mod common;
 
-use gitext_core::{Git, GitError};
+use stemma_core::{Git, GitError};
 
 #[tokio::test]
 async fn version_reports_git() {

@@ -1,4 +1,4 @@
-//! Git and domain logic for gitext. Contains no UI code.
+//! Git and domain logic for stemma. Contains no UI code.
 
 pub mod error;
 pub mod git;

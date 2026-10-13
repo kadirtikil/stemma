@@ -1,6 +1,6 @@
 mod common;
 
-use gitext_core::git::Segment;
+use stemma_core::git::Segment;
 
 #[tokio::test]
 async fn word_diff_and_show_old_version() {

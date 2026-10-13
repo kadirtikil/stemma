@@ -1,6 +1,6 @@
 mod common;
 
-use gitext_core::git::Change;
+use stemma_core::git::Change;
 
 #[tokio::test]
 async fn new_repo_is_clean_on_main() {

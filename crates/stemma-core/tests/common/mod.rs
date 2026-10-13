@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use gitext_core::Git;
+use stemma_core::Git;
 use tempfile::TempDir;
 
 /// A fresh repository in a temp dir, with a local committer identity.

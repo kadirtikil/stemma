@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-gitext-core = { path = "crates/gitext-core" }
+stemma-core = { path = "crates/stemma-core" }
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "sync", "fs"] }
 thiserror = "2"
 tempfile = "3"

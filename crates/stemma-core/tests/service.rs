@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use gitext_core::service::{self, Command, Event};
+use stemma_core::service::{self, Command, Event};
 use tokio::runtime::Handle;
 
 #[tokio::test]

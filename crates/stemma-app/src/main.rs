@@ -1,8 +1,8 @@
 //! Smoke test until the egui UI lands: opens the repo in the current
 //! directory through the git service and prints what the UI would show.
 
-use gitext_core::Git;
-use gitext_core::service::{self, Command, Event};
+use stemma_core::Git;
+use stemma_core::service::{self, Command, Event};
 
 fn main() {
     // The runtime's worker threads run git; the main thread stays free for
@@ -12,7 +12,7 @@ fn main() {
     let git = match runtime.block_on(Git::discover(".")) {
         Ok(git) => git,
         Err(e) => {
-            eprintln!("gitext: {e}");
+            eprintln!("stemma: {e}");
             std::process::exit(1);
         }
     };

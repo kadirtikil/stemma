@@ -1,11 +1,12 @@
 [package]
-name = "gitext-core"
+name = "stemma-app"
 version.workspace = true
 edition.workspace = true
 
-[dependencies]
-tokio.workspace = true
-thiserror.workspace = true
+[[bin]]
+name = "stemma"
+path = "src/main.rs"
 
-[dev-dependencies]
-tempfile.workspace = true
+[dependencies]
+stemma-core.workspace = true
+tokio.workspace = true

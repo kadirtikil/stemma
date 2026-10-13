@@ -48,23 +48,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitext-app"
-version = "0.1.0"
-dependencies = [
- "gitext-core",
- "tokio",
-]
-
-[[package]]
-name = "gitext-core"
-version = "0.1.0"
-dependencies = [
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,6 +127,23 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "stemma-app"
+version = "0.1.0"
+dependencies = [
+ "stemma-core",
+ "tokio",
+]
+
+[[package]]
+name = "stemma-core"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
