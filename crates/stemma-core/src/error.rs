@@ -15,6 +15,9 @@ pub enum GitError {
         stderr: String,
     },
 
+    #[error("draft {branch} is already open in {}", path.display())]
+    BranchCheckedOut { branch: String, path: PathBuf },
+
     #[error("failed to parse git output: {0}")]
     Parse(String),
 

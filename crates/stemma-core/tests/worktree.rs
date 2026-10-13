@@ -2,6 +2,7 @@ mod common;
 
 use std::path::Path;
 
+use stemma_core::GitError;
 use stemma_core::git::Checkout;
 
 fn same(a: &Path, b: &Path) -> bool {
@@ -136,4 +137,39 @@ async fn existing_branch_and_bad_names() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn branch_open_elsewhere_is_explained() {
+    let (_dir, git) = paper().await;
+    let others = tempfile::tempdir().unwrap();
+    let path = others.path().join("response");
+    git.add_worktree(
+        &path,
+        &Checkout::NewBranch {
+            name: "response".into(),
+            from: "main".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    match git.switch("response").await.unwrap_err() {
+        GitError::BranchCheckedOut { branch, path: open } => {
+            assert_eq!(branch, "response");
+            assert!(same(&open, &path));
+        }
+        e => panic!("unexpected {e:?}"),
+    }
+
+    let again = Checkout::Branch("response".into());
+    let err = git.add_worktree(others.path().join("again"), &again).await;
+    assert!(
+        matches!(err, Err(GitError::BranchCheckedOut { .. })),
+        "{err:?}"
+    );
+
+    // Unrelated failures are left alone.
+    let err = git.switch("no-such-draft").await;
+    assert!(matches!(err, Err(GitError::Command { .. })), "{err:?}");
 }

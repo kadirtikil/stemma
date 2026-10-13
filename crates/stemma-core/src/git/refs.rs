@@ -45,7 +45,10 @@ impl Git {
 
     pub async fn switch(&self, name: &str) -> Result<()> {
         check_name(name)?;
-        self.run(&["switch", "-q", name]).await.map(drop)
+        if let Err(e) = self.run(&["switch", "-q", name]).await {
+            return Err(self.explain_checked_out(name, e).await);
+        }
+        Ok(())
     }
 
     /// Creates an annotated tag at HEAD.

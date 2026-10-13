@@ -61,7 +61,12 @@ impl Git {
                 args.extend(["--detach", "--", path_str, rev]);
             }
         }
-        self.run(&args).await?;
+        if let Err(e) = self.run(&args).await {
+            return Err(match checkout {
+                Checkout::Branch(name) => self.explain_checked_out(name, e).await,
+                _ => e,
+            });
+        }
         Git::discover(path).await
     }
 
@@ -80,6 +85,23 @@ impl Git {
     /// Forgets worktrees whose directories were deleted by hand.
     pub async fn prune_worktrees(&self) -> Result<()> {
         self.run(&["worktree", "prune"]).await.map(drop)
+    }
+
+    /// Git refuses to check out a branch that another worktree already has.
+    /// Turns that failure into [`GitError::BranchCheckedOut`] so the UI can
+    /// point the writer at the open draft; other failures pass through.
+    pub(super) async fn explain_checked_out(&self, branch: &str, err: GitError) -> GitError {
+        let Ok(worktrees) = self.worktrees().await else {
+            return err;
+        };
+        let here = self.root().canonicalize().ok();
+        worktrees
+            .into_iter()
+            .find(|wt| wt.branch.as_deref() == Some(branch) && wt.path.canonicalize().ok() != here)
+            .map_or(err, |wt| GitError::BranchCheckedOut {
+                branch: branch.to_owned(),
+                path: wt.path,
+            })
     }
 }
 
