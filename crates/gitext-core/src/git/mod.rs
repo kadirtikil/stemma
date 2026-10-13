@@ -1,9 +1,11 @@
 //! Thin async wrapper around the `git` CLI.
 
 mod commit;
+mod diff;
 mod log;
 mod status;
 
+pub use diff::{FileDiff, Hunk, Segment};
 pub use log::Commit;
 pub use status::{Change, FileStatus, Status};
 
