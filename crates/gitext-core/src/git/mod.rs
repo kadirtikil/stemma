@@ -1,5 +1,9 @@
 //! Thin async wrapper around the `git` CLI.
 
+mod status;
+
+pub use status::{Change, FileStatus, Status};
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
