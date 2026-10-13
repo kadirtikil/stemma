@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
-name = "gitext"
+name = "gitext-app"
+version = "0.1.0"
+dependencies = [
+ "gitext-core",
+]
+
+[[package]]
+name = "gitext-core"
 version = "0.1.0"

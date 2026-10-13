@@ -1,0 +1,11 @@
+[package]
+name = "gitext-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "gitext"
+path = "src/main.rs"
+
+[dependencies]
+gitext-core.workspace = true
