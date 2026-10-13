@@ -5,11 +5,13 @@
 //! commands one at a time, since git serializes writes on `index.lock`
 //! anyway.
 
+use std::path::PathBuf;
+
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::error::{GitError, Result};
-use crate::git::{Branch, Commit, FileDiff, Git, Status, Tag};
+use crate::git::{Branch, Checkout, Commit, FileDiff, Git, Status, Tag, Worktree};
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -40,6 +42,16 @@ pub enum Command {
         message: String,
     },
     Tags,
+    Worktrees,
+    AddWorktree {
+        path: PathBuf,
+        checkout: Checkout,
+    },
+    RemoveWorktree {
+        path: PathBuf,
+        force: bool,
+    },
+    PruneWorktrees,
 }
 
 #[derive(Debug)]
@@ -55,6 +67,9 @@ pub enum Event {
     },
     Branches(Vec<Branch>),
     Tags(Vec<Tag>),
+    Worktrees(Vec<Worktree>),
+    /// A new worktree is ready. Spawn another actor on it to work there.
+    WorktreeAdded(Git),
     Error(GitError),
 }
 
@@ -147,5 +162,21 @@ async fn run(git: &Git, command: Command) -> Result<Vec<Event>> {
             vec![Event::Tags(git.tags().await?)]
         }
         Command::Tags => vec![Event::Tags(git.tags().await?)],
+        Command::Worktrees => vec![Event::Worktrees(git.worktrees().await?)],
+        Command::AddWorktree { path, checkout } => {
+            let added = git.add_worktree(&path, &checkout).await?;
+            vec![
+                Event::WorktreeAdded(added),
+                Event::Worktrees(git.worktrees().await?),
+            ]
+        }
+        Command::RemoveWorktree { path, force } => {
+            git.remove_worktree(&path, force).await?;
+            vec![Event::Worktrees(git.worktrees().await?)]
+        }
+        Command::PruneWorktrees => {
+            git.prune_worktrees().await?;
+            vec![Event::Worktrees(git.worktrees().await?)]
+        }
     })
 }

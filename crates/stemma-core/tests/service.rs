@@ -3,6 +3,7 @@ mod common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use stemma_core::git::Checkout;
 use stemma_core::service::{self, Command, Event};
 use tokio::runtime::Handle;
 
@@ -63,4 +64,44 @@ async fn actor_stops_when_handles_drop() {
     let (handle, mut events) = service::spawn(git, &Handle::current(), || {});
     drop(handle);
     assert!(events.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn added_worktree_gets_its_own_actor() {
+    let (dir, git) = common::repo().await;
+    std::fs::write(dir.path().join("main.typ"), "Text\n").unwrap();
+    git.stage_all().await.unwrap();
+    git.commit("Start").await.unwrap();
+
+    let (handle, mut events) = service::spawn(git, &Handle::current(), || {});
+    let others = tempfile::tempdir().unwrap();
+    let path = others.path().join("response");
+    handle.send(Command::AddWorktree {
+        path: path.clone(),
+        checkout: Checkout::NewBranch {
+            name: "response".into(),
+            from: "main".into(),
+        },
+    });
+
+    let Some(Event::WorktreeAdded(draft)) = events.recv().await else {
+        panic!("expected new worktree");
+    };
+    let Some(Event::Worktrees(wts)) = events.recv().await else {
+        panic!("expected worktree list");
+    };
+    assert_eq!(wts.len(), 2);
+
+    let (draft_handle, mut draft_events) = service::spawn(draft, &Handle::current(), || {});
+    draft_handle.send(Command::Refresh);
+    let Some(Event::Status(s)) = draft_events.recv().await else {
+        panic!("expected draft status");
+    };
+    assert_eq!(s.branch.as_deref(), Some("response"));
+
+    handle.send(Command::RemoveWorktree { path, force: false });
+    let Some(Event::Worktrees(wts)) = events.recv().await else {
+        panic!("expected worktree list after removal");
+    };
+    assert_eq!(wts.len(), 1);
 }
