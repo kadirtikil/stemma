@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod git;
+pub mod service;
 
 pub use error::GitError;
 pub use git::Git;
