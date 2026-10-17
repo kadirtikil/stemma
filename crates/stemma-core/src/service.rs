@@ -71,6 +71,13 @@ pub enum Event {
         contents: Option<String>,
     },
     Written(String),
+    /// Writing failed. Carries the contents back so the edits aren't lost,
+    /// even if the editor has moved on to another file.
+    WriteFailed {
+        path: String,
+        contents: String,
+        error: GitError,
+    },
     Committed(String),
     Log(Vec<Commit>),
     Diff(Vec<FileDiff>),
@@ -142,7 +149,13 @@ async fn run(git: &Git, command: Command) -> Result<Vec<Event>> {
             vec![Event::Opened { path, contents }]
         }
         Command::Write { path, contents } => {
-            git.write(&path, &contents).await?;
+            if let Err(error) = git.write(&path, &contents).await {
+                return Ok(vec![Event::WriteFailed {
+                    path,
+                    contents,
+                    error,
+                }]);
+            }
             vec![Event::Written(path), Event::Status(git.status().await?)]
         }
         Command::Stage(paths) => {

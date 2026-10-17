@@ -128,3 +128,21 @@ async fn writes_files_and_reads_them_back() {
     assert_eq!(path, "main.typ");
     assert_eq!(contents.as_deref(), Some("= Title\n"));
 }
+
+#[tokio::test]
+async fn failed_writes_return_the_contents() {
+    let (_dir, git) = common::repo().await;
+    let (handle, mut events) = service::spawn(git, &Handle::current(), || {});
+
+    // The directory doesn't exist, so the write fails.
+    handle.send(Command::Write {
+        path: "missing/main.typ".into(),
+        contents: "= Title\n".into(),
+    });
+
+    let Some(Event::WriteFailed { path, contents, .. }) = events.recv().await else {
+        panic!("expected a failed write");
+    };
+    assert_eq!(path, "missing/main.typ");
+    assert_eq!(contents, "= Title\n");
+}

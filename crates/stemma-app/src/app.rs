@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use eframe::egui;
-use stemma_core::Git;
 use stemma_core::git::Status;
 use stemma_core::service::{self, Command, Event, GitHandle};
+use stemma_core::{Git, GitError};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -21,6 +22,9 @@ pub struct Paper {
     status: Option<Status>,
     files: Vec<String>,
     editor: Option<Editor>,
+    /// Edits to files no longer open whose write failed, by path. Opening
+    /// the file again restores them.
+    unwritten: BTreeMap<String, String>,
     last_error: Option<String>,
     /// Writes the open file directly on exit, when the actor can no longer
     /// be waited on.
@@ -39,6 +43,9 @@ struct Editor {
     dirty: bool,
     /// When the last edit was made, in egui's input time.
     last_edit: f64,
+    /// The last write failed. Stops retrying on every pause until the next
+    /// edit, though switching files or focus still tries again.
+    write_failed: bool,
 }
 
 enum Contents {
@@ -78,6 +85,7 @@ impl StemmaApp {
             status: None,
             files: Vec::new(),
             editor: None,
+            unwritten: BTreeMap::new(),
             last_error: None,
             repo,
             runtime,
@@ -199,6 +207,7 @@ impl Paper {
                     );
                     if response.changed() {
                         editor.dirty = true;
+                        editor.write_failed = false;
                         editor.last_edit = ui.input(|i| i.time);
                     }
                 });
@@ -208,7 +217,7 @@ impl Paper {
 
     /// Writes the open file once typing has paused for [`WRITE_DELAY`].
     fn write_when_idle(&mut self, ui: &egui::Ui) {
-        let Some(editor) = self.editor.as_ref().filter(|e| e.dirty) else {
+        let Some(editor) = self.editor.as_ref().filter(|e| e.dirty && !e.write_failed) else {
             return;
         };
         let idle = ui.input(|i| i.time) - editor.last_edit;
@@ -223,13 +232,26 @@ impl Paper {
     /// Opens `path` in the editor, writing the current file first.
     fn open(&mut self, path: String) {
         self.flush();
-        self.git.send(Command::Read(path.clone()));
-        self.editor = Some(Editor {
-            path,
-            contents: Contents::Loading,
-            dirty: false,
-            last_edit: 0.0,
-        });
+        let editor = match self.unwritten.remove(&path) {
+            Some(text) => Editor {
+                path,
+                contents: Contents::Text(text),
+                dirty: true,
+                last_edit: 0.0,
+                write_failed: false,
+            },
+            None => {
+                self.git.send(Command::Read(path.clone()));
+                Editor {
+                    path,
+                    contents: Contents::Loading,
+                    dirty: false,
+                    last_edit: 0.0,
+                    write_failed: false,
+                }
+            }
+        };
+        self.editor = Some(editor);
     }
 
     /// Writes the open file to disk if it has unwritten edits.
@@ -248,13 +270,38 @@ impl Paper {
 
     /// The actor won't get to run once eframe exits, so write directly.
     fn write_on_exit(&mut self) {
-        let Some(editor) = self.editor.as_ref().filter(|e| e.dirty) else {
-            return;
-        };
-        if let Contents::Text(text) = &editor.contents
-            && let Err(e) = self.runtime.block_on(self.repo.write(&editor.path, text))
-        {
-            eprintln!("stemma: couldn't write {}: {e}", editor.path);
+        let open = self
+            .editor
+            .as_ref()
+            .filter(|e| e.dirty)
+            .and_then(|e| match &e.contents {
+                Contents::Text(text) => Some((&e.path, text)),
+                _ => None,
+            });
+        for (path, text) in self.unwritten.iter().chain(open) {
+            if let Err(e) = self.runtime.block_on(self.repo.write(path, text)) {
+                eprintln!("stemma: couldn't write {path}: {e}");
+            }
+        }
+    }
+
+    /// Keeps the edits from a failed write so a later write can retry them.
+    fn write_failed(&mut self, path: String, contents: String, error: &GitError) {
+        self.last_error = Some(format!(
+            "Couldn't write {path}, your edits are kept: {error}"
+        ));
+        match self.editor.as_mut().filter(|e| e.path == path) {
+            Some(editor) => {
+                // Newer edits already supersede the failed contents.
+                if !editor.dirty {
+                    editor.contents = Contents::Text(contents);
+                    editor.dirty = true;
+                }
+                editor.write_failed = true;
+            }
+            None => {
+                self.unwritten.insert(path, contents);
+            }
         }
     }
 
@@ -283,6 +330,11 @@ impl Paper {
                         editor.contents = contents.map_or(Contents::Binary, Contents::Text);
                     }
                 }
+                Event::WriteFailed {
+                    path,
+                    contents,
+                    error,
+                } => self.write_failed(path, contents, &error),
                 Event::Error(e) => self.last_error = Some(e.to_string()),
                 _ => {}
             }
