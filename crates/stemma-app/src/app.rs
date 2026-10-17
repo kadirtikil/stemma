@@ -20,13 +20,36 @@ pub struct Paper {
     name: String,
     status: Option<Status>,
     files: Vec<String>,
-    /// The file open in the editor, relative to the repo root.
-    selected: Option<String>,
+    editor: Option<Editor>,
     last_error: Option<String>,
+    /// Writes the open file directly on exit, when the actor can no longer
+    /// be waited on.
+    repo: Git,
     // Runs the git actor on worker threads, keeping the main thread for
     // eframe. Declared last so it is dropped after the handle.
-    _runtime: Runtime,
+    runtime: Runtime,
 }
+
+/// The file open in the editor.
+struct Editor {
+    /// Relative to the repo root.
+    path: String,
+    contents: Contents,
+    /// Edited since the last write to disk.
+    dirty: bool,
+    /// When the last edit was made, in egui's input time.
+    last_edit: f64,
+}
+
+enum Contents {
+    Loading,
+    Text(String),
+    /// Not UTF-8 text, so it can't be edited here.
+    Binary,
+}
+
+/// How long typing must pause before edits are written to disk.
+const WRITE_DELAY: f64 = 1.0;
 
 impl StemmaApp {
     pub fn open(path: &Path, ctx: egui::Context) -> Self {
@@ -43,6 +66,7 @@ impl StemmaApp {
             |n| n.to_string_lossy().into_owned(),
         );
 
+        let repo = git.clone();
         let (handle, events) = service::spawn(git, runtime.handle(), move || ctx.request_repaint());
         handle.send(Command::Refresh);
         handle.send(Command::Files);
@@ -53,9 +77,10 @@ impl StemmaApp {
             name,
             status: None,
             files: Vec::new(),
-            selected: None,
+            editor: None,
             last_error: None,
-            _runtime: runtime,
+            repo,
+            runtime,
         }))
     }
 }
@@ -73,21 +98,36 @@ impl eframe::App for StemmaApp {
             }
         }
     }
+
+    fn on_exit(&mut self) {
+        if let Self::Open(paper) = self {
+            paper.write_on_exit();
+        }
+    }
 }
 
 impl Paper {
     fn ui(&mut self, ui: &mut egui::Ui) {
         self.handle_events();
 
-        // Files may have been edited or committed outside Stemma.
-        let focused = ui.input(|i| {
-            i.events
-                .iter()
-                .any(|e| matches!(e, egui::Event::WindowFocused(true)))
+        let focus = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::WindowFocused(focused) => Some(*focused),
+                _ => None,
+            })
         });
-        if focused {
-            self.git.send(Command::Refresh);
-            self.git.send(Command::Files);
+        match focus {
+            // Files may have been edited or committed outside Stemma.
+            Some(true) => {
+                self.git.send(Command::Refresh);
+                self.git.send(Command::Files);
+                if let Some(editor) = self.editor.as_ref().filter(|e| !e.dirty) {
+                    self.git.send(Command::Read(editor.path.clone()));
+                }
+            }
+            // Other tools should see the latest edits.
+            Some(false) => self.flush(),
+            None => {}
         }
 
         egui::Panel::top("title").show(ui, |ui| {
@@ -117,16 +157,105 @@ impl Paper {
             .default_size(220.0)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    let open = self.editor.as_ref().map(|e| e.path.as_str());
+                    let mut clicked = None;
                     for file in &self.files {
-                        let selected = self.selected.as_ref() == Some(file);
-                        if ui.selectable_label(selected, file).clicked() {
-                            self.selected = Some(file.clone());
+                        if ui.selectable_label(open == Some(file), file).clicked() {
+                            clicked = Some(file.clone());
                         }
+                    }
+                    if let Some(path) = clicked.filter(|p| Some(p.as_str()) != open) {
+                        self.open(path);
                     }
                 });
             });
 
-        egui::CentralPanel::default().show(ui, |_ui| {});
+        egui::CentralPanel::default().show(ui, |ui| self.editor_ui(ui));
+
+        self.write_when_idle(ui);
+    }
+
+    fn editor_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(editor) = &mut self.editor else {
+            ui.centered_and_justified(|ui| ui.weak("Pick a file to start writing."));
+            return;
+        };
+        match &mut editor.contents {
+            Contents::Loading => {
+                ui.centered_and_justified(|ui| ui.spinner());
+            }
+            Contents::Binary => {
+                ui.centered_and_justified(|ui| {
+                    ui.weak(format!("{} isn't a text file.", editor.path));
+                });
+            }
+            Contents::Text(text) => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let response = ui.add_sized(
+                        ui.available_size(),
+                        egui::TextEdit::multiline(text)
+                            .font(egui::TextStyle::Monospace)
+                            .frame(egui::Frame::NONE),
+                    );
+                    if response.changed() {
+                        editor.dirty = true;
+                        editor.last_edit = ui.input(|i| i.time);
+                    }
+                });
+            }
+        }
+    }
+
+    /// Writes the open file once typing has paused for [`WRITE_DELAY`].
+    fn write_when_idle(&mut self, ui: &egui::Ui) {
+        let Some(editor) = self.editor.as_ref().filter(|e| e.dirty) else {
+            return;
+        };
+        let idle = ui.input(|i| i.time) - editor.last_edit;
+        if idle >= WRITE_DELAY {
+            self.flush();
+        } else {
+            ui.ctx()
+                .request_repaint_after_secs((WRITE_DELAY - idle) as f32);
+        }
+    }
+
+    /// Opens `path` in the editor, writing the current file first.
+    fn open(&mut self, path: String) {
+        self.flush();
+        self.git.send(Command::Read(path.clone()));
+        self.editor = Some(Editor {
+            path,
+            contents: Contents::Loading,
+            dirty: false,
+            last_edit: 0.0,
+        });
+    }
+
+    /// Writes the open file to disk if it has unwritten edits.
+    fn flush(&mut self) {
+        let Some(editor) = self.editor.as_mut().filter(|e| e.dirty) else {
+            return;
+        };
+        if let Contents::Text(text) = &editor.contents {
+            self.git.send(Command::Write {
+                path: editor.path.clone(),
+                contents: text.clone(),
+            });
+        }
+        editor.dirty = false;
+    }
+
+    /// The actor won't get to run once eframe exits, so write directly.
+    fn write_on_exit(&mut self) {
+        let Some(editor) = self.editor.as_ref().filter(|e| e.dirty) else {
+            return;
+        };
+        if let Contents::Text(text) = &editor.contents
+            && let Err(e) = self.runtime.block_on(self.repo.write(&editor.path, text))
+        {
+            eprintln!("stemma: couldn't write {}: {e}", editor.path);
+        }
     }
 
     fn handle_events(&mut self) {
@@ -134,11 +263,25 @@ impl Paper {
             match event {
                 Event::Status(status) => self.status = Some(status),
                 Event::Files(files) => {
-                    // Drop the selection if the file was deleted or renamed.
-                    if self.selected.as_ref().is_some_and(|s| !files.contains(s)) {
-                        self.selected = None;
+                    // Close the file if it was deleted or renamed, unless
+                    // there are edits that writing would bring back.
+                    if self
+                        .editor
+                        .as_ref()
+                        .is_some_and(|e| !e.dirty && !files.contains(&e.path))
+                    {
+                        self.editor = None;
                     }
                     self.files = files;
+                }
+                Event::Opened { path, contents } => {
+                    // Ignore replies for a file since closed, and don't
+                    // clobber edits made while a reload was in flight.
+                    if let Some(editor) =
+                        self.editor.as_mut().filter(|e| e.path == path && !e.dirty)
+                    {
+                        editor.contents = contents.map_or(Contents::Binary, Contents::Text);
+                    }
                 }
                 Event::Error(e) => self.last_error = Some(e.to_string()),
                 _ => {}
