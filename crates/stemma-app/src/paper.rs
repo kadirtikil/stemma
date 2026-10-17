@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use eframe::egui;
 use egui_neo::{
-    NeuAlert, NeuBadge, NeuBreadcrumbs, NeuEmptyState, NeuIcon, NeuLoader, NeuStatus, NeuTextarea,
-    NeuTree, NeuTreeNode,
+    NeuAlert, NeuBadge, NeuBreadcrumbs, NeuButton, NeuColor, NeuEmptyState, NeuIcon, NeuLoader,
+    NeuModal, NeuStatus, NeuText, NeuTextInput, NeuTextarea, NeuTree, NeuTreeNode,
 };
 use stemma_core::git::Status;
 use stemma_core::service::{self, Command, Event, GitHandle};
@@ -30,6 +30,8 @@ pub struct Paper {
     /// the file again restores them.
     unwritten: BTreeMap<String, String>,
     last_error: Option<String>,
+    /// The save dialog, while it is open.
+    save_dialog: Option<SaveDialog>,
     /// Whether the file list has arrived yet, to open [`MAIN_FILE`] once.
     listed: bool,
     /// Writes pending edits directly on close, when the actor can no longer
@@ -60,6 +62,13 @@ enum Contents {
     Binary,
 }
 
+/// Asks what changed before saving a snapshot.
+struct SaveDialog {
+    message: String,
+    /// Focus the message field once it's shown.
+    focus: bool,
+}
+
 /// How long typing must pause before edits are written to disk.
 const WRITE_DELAY: f64 = 1.0;
 
@@ -86,6 +95,7 @@ impl Paper {
             editor: None,
             unwritten: BTreeMap::new(),
             last_error: None,
+            save_dialog: None,
             listed: false,
             repo,
         }
@@ -116,20 +126,39 @@ impl Paper {
             None => {}
         }
 
+        let unsaved = self.has_unsaved_changes();
+        let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+        let mut save = ui.input_mut(|i| i.consume_shortcut(&shortcut)) && unsaved;
+
         let mut back = false;
         egui::Panel::top("title").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let crumbs = NeuBreadcrumbs::new(["Library", self.name.as_str()]).show(ui);
                 back = crumbs.inner == Some(0);
-                if let Some(branch) = self.status.as_ref().and_then(|s| s.branch.as_deref()) {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Right to left: the first widget added is the rightmost.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    save |= ui.add_enabled(unsaved, NeuButton::new("Save")).clicked();
+                    let (text, color) = if unsaved {
+                        ("Unsaved changes", NeuColor::Warning)
+                    } else {
+                        ("Saved", NeuColor::Success)
+                    };
+                    ui.add(NeuBadge::new(text).color(color));
+                    if let Some(branch) = self.status.as_ref().and_then(|s| s.branch.as_deref()) {
                         ui.add(NeuBadge::new(format!("draft: {branch}")));
-                    });
-                }
+                    }
+                });
             });
             ui.add_space(6.0);
         });
+        if save && self.save_dialog.is_none() {
+            self.save_dialog = Some(SaveDialog {
+                message: String::new(),
+                focus: true,
+            });
+        }
+        self.save_dialog_ui(ui.ctx());
 
         if let Some(error) = &self.last_error {
             let mut open = true;
@@ -182,6 +211,60 @@ impl Paper {
         back
     }
 
+    /// Edits not yet in a commit, including ones not yet written to disk.
+    fn has_unsaved_changes(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.dirty)
+            || !self.unwritten.is_empty()
+            || self.status.as_ref().is_some_and(|s| !s.is_clean())
+    }
+
+    fn save_dialog_ui(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.save_dialog else {
+            return;
+        };
+        let mut open = true;
+        let mut submit = false;
+        NeuModal::new("save", &mut open)
+            .title("Save a snapshot")
+            .show(ctx, |ui| {
+                ui.add(NeuText::new("Describe what changed since the last save.").dimmed());
+                ui.add_space(8.0);
+                let field = ui.add(
+                    NeuTextInput::new(&mut dialog.message)
+                        .placeholder("Rewrite the introduction")
+                        .width(ui.available_width()),
+                );
+                if std::mem::take(&mut dialog.focus) {
+                    field.request_focus();
+                }
+                let ready = !dialog.message.trim().is_empty();
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.add_space(12.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    submit = ui.add_enabled(ready, NeuButton::new("Save")).clicked()
+                        || (ready && entered);
+                    if ui.add(NeuButton::new("Cancel")).clicked() {
+                        ui.close();
+                    }
+                });
+            });
+
+        if submit {
+            let message = dialog.message.trim().to_owned();
+            // The actor runs commands in order, so pending edits are written
+            // before the snapshot is taken.
+            self.flush();
+            self.git.send(Command::Save { message });
+        }
+        if submit || !open {
+            self.save_dialog = None;
+            // Hand focus back so the writer can keep typing.
+            if let Some(editor) = &mut self.editor {
+                editor.focus = true;
+            }
+        }
+    }
+
     fn editor_ui(&mut self, ui: &mut egui::Ui) {
         let Some(editor) = &mut self.editor else {
             ui.add_space(ui.available_height() / 3.0);
@@ -215,8 +298,15 @@ impl Paper {
                         .rows(rows)
                         .id_salt(&editor.path),
                 );
-                if std::mem::take(&mut editor.focus) {
-                    response.request_focus();
+                // Keep asking until it sticks: a modal closing this frame
+                // still holds focus.
+                if editor.focus {
+                    if response.has_focus() {
+                        editor.focus = false;
+                    } else {
+                        response.request_focus();
+                        ui.ctx().request_repaint();
+                    }
                 }
                 if response.changed() {
                     editor.dirty = true;
