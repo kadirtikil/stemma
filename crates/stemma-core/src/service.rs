@@ -16,6 +16,7 @@ use crate::git::{Branch, Checkout, Commit, FileDiff, Git, Status, Tag, Worktree}
 #[derive(Debug, Clone)]
 pub enum Command {
     Refresh,
+    Files,
     Stage(Vec<String>),
     StageAll,
     Commit {
@@ -57,6 +58,7 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Event {
     Status(Status),
+    Files(Vec<String>),
     Committed(String),
     Log(Vec<Commit>),
     Diff(Vec<FileDiff>),
@@ -122,6 +124,7 @@ async fn execute(git: &Git, command: Command) -> Vec<Event> {
 async fn run(git: &Git, command: Command) -> Result<Vec<Event>> {
     Ok(match command {
         Command::Refresh => vec![Event::Status(git.status().await?)],
+        Command::Files => vec![Event::Files(git.files().await?)],
         Command::Stage(paths) => {
             let paths: Vec<_> = paths.iter().map(String::as_str).collect();
             git.stage(&paths).await?;

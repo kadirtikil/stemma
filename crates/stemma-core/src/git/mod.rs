@@ -2,6 +2,7 @@
 
 mod commit;
 mod diff;
+mod files;
 mod log;
 mod refs;
 mod status;
