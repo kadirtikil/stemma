@@ -53,7 +53,12 @@ impl eframe::App for StemmaApp {
             Self::Ready(stemma) => stemma.ui(ui),
             Self::Failed(message) => {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    ui.centered_and_justified(|ui| ui.label(message.as_str()));
+                    ui.add_space(ui.available_height() / 3.0);
+                    ui.add(
+                        egui_neo::NeuEmptyState::new("Stemma couldn't start")
+                            .icon(egui_neo::NeuIcon::Warning)
+                            .description(message.as_str()),
+                    );
                 });
             }
         }
