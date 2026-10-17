@@ -18,6 +18,12 @@ pub enum GitError {
     #[error("draft {branch} is already open in {}", path.display())]
     BranchCheckedOut { branch: String, path: PathBuf },
 
+    #[error("\"{0}\" can't be used as a paper name")]
+    InvalidPaperName(String),
+
+    #[error("a paper named \"{0}\" already exists")]
+    PaperExists(String),
+
     #[error("{0} is outside the paper")]
     OutsideRepo(String),
 
