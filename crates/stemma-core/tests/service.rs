@@ -146,3 +146,33 @@ async fn failed_writes_return_the_contents() {
     assert_eq!(path, "missing/main.typ");
     assert_eq!(contents, "= Title\n");
 }
+
+#[tokio::test]
+async fn save_commits_every_change() {
+    let (dir, git) = common::repo().await;
+    std::fs::create_dir(dir.path().join("chapters")).unwrap();
+    std::fs::write(dir.path().join("main.typ"), "= Title\n").unwrap();
+    std::fs::write(dir.path().join("chapters/intro.typ"), "= Intro\n").unwrap();
+    let (handle, mut events) = service::spawn(git, &Handle::current(), || {});
+
+    handle.send(Command::Save {
+        message: "First draft".into(),
+    });
+    handle.send(Command::Log {
+        path: None,
+        limit: 10,
+    });
+
+    let Some(Event::Committed(oid)) = events.recv().await else {
+        panic!("expected a commit");
+    };
+    let Some(Event::Status(status)) = events.recv().await else {
+        panic!("expected status after saving");
+    };
+    assert!(status.is_clean());
+    let Some(Event::Log(log)) = events.recv().await else {
+        panic!("expected log");
+    };
+    assert_eq!(log[0].oid, oid);
+    assert_eq!(log[0].summary, "First draft");
+}

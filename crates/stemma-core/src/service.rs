@@ -28,6 +28,10 @@ pub enum Command {
     Commit {
         message: String,
     },
+    /// Snapshots the whole paper: stages every change, then commits.
+    Save {
+        message: String,
+    },
     Log {
         path: Option<String>,
         limit: usize,
@@ -168,6 +172,11 @@ async fn run(git: &Git, command: Command) -> Result<Vec<Event>> {
             vec![Event::Status(git.status().await?)]
         }
         Command::Commit { message } => {
+            let oid = git.commit(&message).await?;
+            vec![Event::Committed(oid), Event::Status(git.status().await?)]
+        }
+        Command::Save { message } => {
+            git.stage_all().await?;
             let oid = git.commit(&message).await?;
             vec![Event::Committed(oid), Event::Status(git.status().await?)]
         }
