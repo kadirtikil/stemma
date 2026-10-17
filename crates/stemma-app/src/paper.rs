@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 
 use eframe::egui;
+use egui_neo::{
+    NeuAlert, NeuBadge, NeuBreadcrumbs, NeuEmptyState, NeuIcon, NeuLoader, NeuStatus, NeuTextarea,
+    NeuTree, NeuTreeNode,
+};
 use stemma_core::git::Status;
 use stemma_core::service::{self, Command, Event, GitHandle};
 use stemma_core::{Git, GitError};
@@ -17,6 +21,10 @@ pub struct Paper {
     name: String,
     status: Option<Status>,
     files: Vec<String>,
+    /// [`Self::files`] as nested folders for the sidebar.
+    tree: Vec<NeuTreeNode<String>>,
+    /// The sidebar's selection: the open file, or a folder just clicked.
+    tree_selected: Option<String>,
     editor: Option<Editor>,
     /// Edits to files no longer open whose write failed, by path. Opening
     /// the file again restores them.
@@ -41,6 +49,8 @@ struct Editor {
     /// The last write failed. Stops retrying on every pause until the next
     /// edit, though switching files or focus still tries again.
     write_failed: bool,
+    /// Focus the text once it's shown, so the writer can type right away.
+    focus: bool,
 }
 
 enum Contents {
@@ -71,6 +81,8 @@ impl Paper {
             name,
             status: None,
             files: Vec::new(),
+            tree: Vec::new(),
+            tree_selected: None,
             editor: None,
             unwritten: BTreeMap::new(),
             last_error: None,
@@ -106,41 +118,59 @@ impl Paper {
 
         let mut back = false;
         egui::Panel::top("title").show(ui, |ui| {
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                back = ui.button("< Library").clicked();
-                ui.heading(&self.name);
+                let crumbs = NeuBreadcrumbs::new(["Library", self.name.as_str()]).show(ui);
+                back = crumbs.inner == Some(0);
                 if let Some(branch) = self.status.as_ref().and_then(|s| s.branch.as_deref()) {
-                    ui.label(format!("draft: {branch}"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(NeuBadge::new(format!("draft: {branch}")));
+                    });
                 }
             });
+            ui.add_space(6.0);
         });
 
         if let Some(error) = &self.last_error {
-            let mut dismissed = false;
+            let mut open = true;
             egui::Panel::bottom("error").show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                    dismissed = ui.button("Dismiss").clicked();
-                });
+                ui.add_space(6.0);
+                ui.add(
+                    NeuAlert::new(error.as_str())
+                        .status(NeuStatus::Danger)
+                        .closable(&mut open),
+                );
+                ui.add_space(6.0);
             });
-            if dismissed {
+            if !open {
                 self.last_error = None;
             }
         }
 
         egui::Panel::left("files")
             .resizable(true)
-            .default_size(220.0)
+            .default_size(240.0)
+            .min_size(180.0)
             .show(ui, |ui| {
+                ui.add_space(8.0);
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    let open = self.editor.as_ref().map(|e| e.path.as_str());
-                    let mut clicked = None;
-                    for file in &self.files {
-                        if ui.selectable_label(open == Some(file), file).clicked() {
-                            clicked = Some(file.clone());
-                        }
+                    // Follow the editor unless a folder was just clicked.
+                    let open = self.editor.as_ref().map(|e| e.path.clone());
+                    if self
+                        .tree_selected
+                        .as_ref()
+                        .is_none_or(|s| !s.ends_with('/'))
+                    {
+                        self.tree_selected.clone_from(&open);
                     }
-                    if let Some(path) = clicked.filter(|p| Some(p.as_str()) != open) {
+                    let tree = NeuTree::new(&self.tree, &mut self.tree_selected)
+                        .default_expanded(true)
+                        .id_salt("files");
+                    if ui.add(tree).changed()
+                        && let Some(path) = self.tree_selected.clone()
+                        && !path.ends_with('/')
+                        && Some(&path) != open.as_ref()
+                    {
                         self.open_file(path);
                     }
                 });
@@ -154,32 +184,45 @@ impl Paper {
 
     fn editor_ui(&mut self, ui: &mut egui::Ui) {
         let Some(editor) = &mut self.editor else {
-            ui.centered_and_justified(|ui| ui.weak("Pick a file to start writing."));
+            ui.add_space(ui.available_height() / 3.0);
+            ui.add(
+                NeuEmptyState::new("No file open")
+                    .icon(NeuIcon::Search)
+                    .description("Pick a file on the left to start writing."),
+            );
             return;
         };
         match &mut editor.contents {
             Contents::Loading => {
-                ui.centered_and_justified(|ui| ui.spinner());
+                ui.centered_and_justified(|ui| ui.add(NeuLoader::new()));
             }
             Contents::Binary => {
-                ui.centered_and_justified(|ui| {
-                    ui.weak(format!("{} isn't a text file.", editor.path));
-                });
+                ui.add_space(ui.available_height() / 3.0);
+                ui.add(
+                    NeuEmptyState::new(editor.path.as_str())
+                        .icon(NeuIcon::Info)
+                        .description("This isn't a text file, so it can't be edited here."),
+                );
             }
             Contents::Text(text) => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let response = ui.add_sized(
-                        ui.available_size(),
-                        egui::TextEdit::multiline(text)
-                            .font(egui::TextStyle::Monospace)
-                            .frame(egui::Frame::NONE),
-                    );
-                    if response.changed() {
-                        editor.dirty = true;
-                        editor.write_failed = false;
-                        editor.last_edit = ui.input(|i| i.time);
-                    }
-                });
+                // The textarea scrolls inside a fixed number of rows, so fill
+                // the panel with as many as fit, leaving room for its padding.
+                let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                let rows = ((ui.available_height() - 32.0) / row_height).max(1.0) as usize;
+                let response = ui.add(
+                    NeuTextarea::new(text)
+                        .width(ui.available_width())
+                        .rows(rows)
+                        .id_salt(&editor.path),
+                );
+                if std::mem::take(&mut editor.focus) {
+                    response.request_focus();
+                }
+                if response.changed() {
+                    editor.dirty = true;
+                    editor.write_failed = false;
+                    editor.last_edit = ui.input(|i| i.time);
+                }
             }
         }
     }
@@ -208,6 +251,7 @@ impl Paper {
                 dirty: true,
                 last_edit: 0.0,
                 write_failed: false,
+                focus: true,
             },
             None => {
                 self.git.send(Command::Read(path.clone()));
@@ -217,6 +261,7 @@ impl Paper {
                     dirty: false,
                     last_edit: 0.0,
                     write_failed: false,
+                    focus: true,
                 }
             }
         };
@@ -290,6 +335,7 @@ impl Paper {
                         self.editor = None;
                     }
                     self.files = files;
+                    self.tree = file_tree(&self.files);
                     if !self.listed
                         && self.editor.is_none()
                         && self.files.iter().any(|f| f == MAIN_FILE)
@@ -316,5 +362,77 @@ impl Paper {
                 _ => {}
             }
         }
+    }
+}
+
+/// Nests sorted, `/`-separated paths into folders. A folder's value is its
+/// path with a trailing `/`, so it can't be mistaken for a file.
+fn file_tree(files: &[String]) -> Vec<NeuTreeNode<String>> {
+    fn insert(nodes: &mut Vec<NeuTreeNode<String>>, prefix: &str, rest: &str, path: &str) {
+        match rest.split_once('/') {
+            None => nodes.push(NeuTreeNode::new(path.to_owned(), rest)),
+            Some((dir, rest)) => {
+                let value = format!("{prefix}{dir}/");
+                let index = match nodes.iter().position(|n| n.value == value) {
+                    Some(index) => index,
+                    None => {
+                        nodes.push(NeuTreeNode::new(value.clone(), dir));
+                        nodes.len() - 1
+                    }
+                };
+                insert(&mut nodes[index].children, &value, rest, path);
+            }
+        }
+    }
+
+    let mut nodes = Vec::new();
+    for path in files {
+        insert(&mut nodes, "", path, path);
+    }
+    sort(&mut nodes);
+    nodes
+}
+
+/// Folders before files, each alphabetically, like a file manager.
+fn sort(nodes: &mut [NeuTreeNode<String>]) {
+    nodes.sort_by(|a, b| {
+        let a_dir = !a.children.is_empty();
+        let b_dir = !b.children.is_empty();
+        b_dir.cmp(&a_dir).then_with(|| a.label.cmp(&b.label))
+    });
+    for node in nodes {
+        sort(&mut node.children);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nests_files_into_folders_listed_first() {
+        let files = [
+            "chapters/intro.typ",
+            "chapters/notes/todo.typ",
+            "main.typ",
+            "refs.bib",
+        ]
+        .map(String::from);
+
+        let tree = file_tree(&files);
+
+        let chapters = &tree[0];
+        assert_eq!(
+            (chapters.value.as_str(), chapters.label.as_str()),
+            ("chapters/", "chapters")
+        );
+        assert_eq!(chapters.children[0].value, "chapters/notes/");
+        assert_eq!(
+            chapters.children[0].children[0].value,
+            "chapters/notes/todo.typ"
+        );
+        assert_eq!(chapters.children[1].value, "chapters/intro.typ");
+        assert_eq!(tree[1].value, "main.typ");
+        assert_eq!(tree[2].value, "refs.bib");
     }
 }
