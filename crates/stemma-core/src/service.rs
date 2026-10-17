@@ -17,6 +17,12 @@ use crate::git::{Branch, Checkout, Commit, FileDiff, Git, Status, Tag, Worktree}
 pub enum Command {
     Refresh,
     Files,
+    /// Reads a work-tree file, answered by [`Event::Opened`].
+    Read(String),
+    Write {
+        path: String,
+        contents: String,
+    },
     Stage(Vec<String>),
     StageAll,
     Commit {
@@ -59,6 +65,12 @@ pub enum Command {
 pub enum Event {
     Status(Status),
     Files(Vec<String>),
+    /// A work-tree file's contents, or `None` if it isn't text.
+    Opened {
+        path: String,
+        contents: Option<String>,
+    },
+    Written(String),
     Committed(String),
     Log(Vec<Commit>),
     Diff(Vec<FileDiff>),
@@ -125,6 +137,14 @@ async fn run(git: &Git, command: Command) -> Result<Vec<Event>> {
     Ok(match command {
         Command::Refresh => vec![Event::Status(git.status().await?)],
         Command::Files => vec![Event::Files(git.files().await?)],
+        Command::Read(path) => {
+            let contents = git.read(&path).await?;
+            vec![Event::Opened { path, contents }]
+        }
+        Command::Write { path, contents } => {
+            git.write(&path, &contents).await?;
+            vec![Event::Written(path), Event::Status(git.status().await?)]
+        }
         Command::Stage(paths) => {
             let paths: Vec<_> = paths.iter().map(String::as_str).collect();
             git.stage(&paths).await?;

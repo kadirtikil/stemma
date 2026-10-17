@@ -105,3 +105,26 @@ async fn added_worktree_gets_its_own_actor() {
     };
     assert_eq!(wts.len(), 1);
 }
+
+#[tokio::test]
+async fn writes_files_and_reads_them_back() {
+    let (_dir, git) = common::repo().await;
+    let (handle, mut events) = service::spawn(git, &Handle::current(), || {});
+
+    handle.send(Command::Write {
+        path: "main.typ".into(),
+        contents: "= Title\n".into(),
+    });
+    handle.send(Command::Read("main.typ".into()));
+
+    assert!(matches!(events.recv().await, Some(Event::Written(p)) if p == "main.typ"));
+    let Some(Event::Status(status)) = events.recv().await else {
+        panic!("expected status after writing");
+    };
+    assert_eq!(status.files.len(), 1);
+    let Some(Event::Opened { path, contents }) = events.recv().await else {
+        panic!("expected file contents");
+    };
+    assert_eq!(path, "main.typ");
+    assert_eq!(contents.as_deref(), Some("= Title\n"));
+}
