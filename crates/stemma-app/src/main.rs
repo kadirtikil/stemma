@@ -1,13 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod library;
+mod paper;
 
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
-    let path = std::env::args_os()
-        .nth(1)
-        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    // The library holds every paper. It defaults to ~/Stemma.
+    let library = std::env::args_os().nth(1).map_or_else(
+        || std::env::home_dir().unwrap_or_default().join("Stemma"),
+        PathBuf::from,
+    );
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -21,7 +25,7 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             // Panels take the neumorphic surface color so the soft shadows work.
             egui_neo::install(&cc.egui_ctx);
-            Ok(Box::new(app::StemmaApp::open(&path, cc.egui_ctx.clone())))
+            Ok(Box::new(app::StemmaApp::open(library, cc.egui_ctx.clone())))
         }),
     )
 }

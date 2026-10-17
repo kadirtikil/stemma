@@ -16,13 +16,20 @@ cargo can't fetch yet. Clone it next to this repository:
 git clone git@github.com:mehmetmuejde/egui-neo.git ../egui-neo
 ```
 
-Then open a paper, which can be any git repository:
+Then start Stemma:
 
 ```sh
-cargo run --release -p stemma-app -- path/to/paper
+cargo run --release -p stemma-app
 ```
 
-Leave out the path to open the repository in the current directory.
+Stemma keeps your papers in a library at `~/Stemma`, which is created on
+first start. Each paper is a folder there with its own git repository,
+and you can create new papers from the app. To use a different library,
+pass its folder:
+
+```sh
+cargo run --release -p stemma-app -- path/to/library
+```
 
 ## Developing
 
