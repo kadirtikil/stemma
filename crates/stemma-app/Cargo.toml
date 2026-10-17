@@ -11,3 +11,5 @@ path = "src/main.rs"
 [dependencies]
 stemma-core.workspace = true
 tokio.workspace = true
+eframe.workspace = true
+egui_neo.workspace = true

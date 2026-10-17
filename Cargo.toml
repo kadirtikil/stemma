@@ -12,3 +12,7 @@ stemma-core = { path = "crates/stemma-core" }
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "sync", "fs"] }
 thiserror = "2"
 tempfile = "3"
+eframe = "0.36.2"
+# Neumorphic widgets. Path dependency on a sibling checkout until the repo is
+# reachable from cargo (it isn't published to crates.io).
+egui_neo = { path = "../egui-neo/crates/egui_neo" }
