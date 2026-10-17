@@ -19,6 +19,9 @@ pub struct Paper {
     events: UnboundedReceiver<Event>,
     name: String,
     status: Option<Status>,
+    files: Vec<String>,
+    /// The file open in the editor, relative to the repo root.
+    selected: Option<String>,
     last_error: Option<String>,
     // Runs the git actor on worker threads, keeping the main thread for
     // eframe. Declared last so it is dropped after the handle.
@@ -42,12 +45,15 @@ impl StemmaApp {
 
         let (handle, events) = service::spawn(git, runtime.handle(), move || ctx.request_repaint());
         handle.send(Command::Refresh);
+        handle.send(Command::Files);
 
         Self::Open(Box::new(Paper {
             git: handle,
             events,
             name,
             status: None,
+            files: Vec::new(),
+            selected: None,
             last_error: None,
             _runtime: runtime,
         }))
@@ -81,6 +87,7 @@ impl Paper {
         });
         if focused {
             self.git.send(Command::Refresh);
+            self.git.send(Command::Files);
         }
 
         egui::Panel::top("title").show(ui, |ui| {
@@ -105,6 +112,20 @@ impl Paper {
             }
         }
 
+        egui::Panel::left("files")
+            .resizable(true)
+            .default_size(220.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for file in &self.files {
+                        let selected = self.selected.as_ref() == Some(file);
+                        if ui.selectable_label(selected, file).clicked() {
+                            self.selected = Some(file.clone());
+                        }
+                    }
+                });
+            });
+
         egui::CentralPanel::default().show(ui, |_ui| {});
     }
 
@@ -112,6 +133,13 @@ impl Paper {
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::Status(status) => self.status = Some(status),
+                Event::Files(files) => {
+                    // Drop the selection if the file was deleted or renamed.
+                    if self.selected.as_ref().is_some_and(|s| !files.contains(s)) {
+                        self.selected = None;
+                    }
+                    self.files = files;
+                }
                 Event::Error(e) => self.last_error = Some(e.to_string()),
                 _ => {}
             }
